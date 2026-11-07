@@ -53,10 +53,10 @@ const ANATOMY_CHOICES: { label: string; slug: string }[] = [
   { label: 'Hamstrings', slug: 'hamstring' },
   { label: 'Calves', slug: 'calves' },
   { label: 'Chest', slug: 'chest' },
-  { label: 'Lats / Upper Back', slug: 'upper-back' },
+  { label: 'Lats', slug: 'upper-back' },
   { label: 'Lower Back', slug: 'lower-back' },
   { label: 'Traps', slug: 'trapezius' },
-  { label: 'Delts / Shoulders', slug: 'deltoids' },
+  { label: 'Shoulders', slug: 'deltoids' },
   { label: 'Biceps', slug: 'biceps' },
   { label: 'Triceps', slug: 'triceps' },
   { label: 'Forearms', slug: 'forearm' },
@@ -102,7 +102,11 @@ export const ExerciseWiki: React.FC<ExerciseWikiProps> = ({
     e.preventDefault();
     if (!customName.trim()) return;
     const chosen = ANATOMY_CHOICES[customPrimaryIdx] || ANATOMY_CHOICES[0];
-    const newId = `custom-${Date.now()}`;
+    const uniqueSuffix =
+      typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+        ? crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const newId = `custom-${uniqueSuffix}`;
     const prepList = customPrepare
       .split('\n')
       .map((s) => s.trim())
@@ -128,15 +132,31 @@ export const ExerciseWiki: React.FC<ExerciseWikiProps> = ({
           ? breathList
           : ['Inhale on eccentric, exhale on concentric.'],
     };
+    const asciiSlug = customName
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/đ/g, 'd')
+      .replace(/Đ/g, 'D')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '');
+
+    const validVideoUrl =
+      customVideoUrl.trim().startsWith('http://') ||
+      customVideoUrl.trim().startsWith('https://') ||
+      customVideoUrl.trim().startsWith('/')
+        ? customVideoUrl.trim()
+        : '';
+
     const newEx: Exercise = {
       id: newId,
-      slug: customName.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
+      slug: asciiSlug || `custom-${Date.now()}`,
       name: customName.trim(),
       nameVi: customName.trim(),
       aliases: [],
-      category: chosen.label.split(' / ')[0],
+      category: chosen.label,
       equipment: customEquipment,
-      videoUrl: customVideoUrl.trim() || exercises[0]?.videoUrl || '',
+      videoUrl: validVideoUrl,
       primaryMuscles: [chosen.label],
       secondaryMuscles: [],
       primarySlugs: [chosen.slug],
@@ -180,7 +200,7 @@ export const ExerciseWiki: React.FC<ExerciseWikiProps> = ({
               onClick={() => {
                 onSearchChange('');
               }}
-              className="absolute right-2.5 top-1/2 -translate-y-1/2 w-6 h-6 rounded-full bg-slate-200 hover:bg-slate-300 text-slate-600 font-bold text-xs flex items-center justify-center cursor-pointer transition"
+              className="absolute right-2.5 top-1/2 -translate-y-1/2 w-7 h-7 rounded-full bg-slate-200 hover:bg-slate-300 text-slate-600 font-bold text-xs flex items-center justify-center cursor-pointer transition"
               title="Clear search"
               aria-label="Clear search"
             >
@@ -349,7 +369,15 @@ export const ExerciseWiki: React.FC<ExerciseWikiProps> = ({
           return (
             <div
               key={ex.id}
+              role="button"
+              tabIndex={0}
               onClick={() => onSelectExercise(ex.id)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  onSelectExercise(ex.id);
+                }
+              }}
               className="bg-white rounded-[22px] p-4 shadow-xs hover:shadow-md cursor-pointer transition flex items-center justify-between gap-3"
             >
               <div className="min-w-0 space-y-1">

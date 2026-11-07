@@ -120,8 +120,14 @@ MUSCLE_MAP = {
     "transverse abdominis": ("Core", "abs", "Core"),
     "obliques": ("Obliques", "obliques", "Core"),
     "external obliques": ("Obliques", "obliques", "Core"),
-    "hip flexors": ("Hip Flexors", "adductors", "Core"),
-    "iliopsoas": ("Hip Flexors", "adductors", "Core"),
+    "hip flexors": ("Hip Flexors", "abs", "Core"),
+    "iliopsoas": ("Hip Flexors", "abs", "Core"),
+    "ankle stabilizers": ("Tibialis", "tibialis", "Calves"),
+    "ankles": ("Tibialis", "tibialis", "Calves"),
+    "cardiovascular system": ("Full Body", "deltoids", "Core"),
+    "anconeus": ("Triceps", "triceps", "Triceps"),
+    "flexor carpi radialis": ("Forearms", "forearm", "Forearms"),
+    "flexor carpi ulnaris": ("Forearms", "forearm", "Forearms"),
 }
 
 CARDIO_SKIP_IDS = {
@@ -141,7 +147,9 @@ def map_muscle(raw_name: str):
     for k, val in MUSCLE_MAP.items():
         if k in key or key in k:
             return val
-    return (raw_name.strip().title(), "abs", "Core")
+    raise ValueError(
+        f"[Hagane] Unknown upstream muscle: '{raw_name}'. Please add it to MUSCLE_MAP explicitly."
+    )
 
 
 def normalize_equipment(eq: str) -> str:
@@ -272,9 +280,13 @@ def main():
         secondary_slugs = []
         for sm in ex.get("secondaryMuscles", []):
             s_disp, s_slug, _ = map_muscle(sm)
-            if s_disp not in primary_muscles and s_disp not in secondary_muscles:
+            if (
+                s_disp not in primary_muscles
+                and s_disp not in secondary_muscles
+                and s_slug not in primary_slugs
+                and s_slug not in secondary_slugs
+            ):
                 secondary_muscles.append(s_disp)
-            if s_slug not in primary_slugs and s_slug not in secondary_slugs:
                 secondary_slugs.append(s_slug)
 
         name_l = display_name.lower()

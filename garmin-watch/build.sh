@@ -58,8 +58,35 @@ if [ ! -f "$KEY_DER" ]; then
   echo "ℹ️  Keep garmin-watch/$KEY_DER backed up so future watch updates share the same key."
 fi
 
-# 3. Build Method 1: USB Sideload binary (Hagane.prg) for Forerunner 255 Music (fr255m)
+# 3. Check if device profile is installed
 DEVICE="${1:-fr255m}"
+DEVICE_PATHS=(
+  "$HOME/Library/Application Support/Garmin/ConnectIQ/Devices/$DEVICE"
+  "$HOME/.Garmin/ConnectIQ/Devices/$DEVICE"
+)
+
+DEVICE_FOUND=false
+for p in "${DEVICE_PATHS[@]}"; do
+  if [ -d "$p" ]; then
+    DEVICE_FOUND=true
+    break
+  fi
+done
+
+if [ "$DEVICE_FOUND" = false ]; then
+  echo "⚠️  Garmin device profile '$DEVICE' has not been downloaded yet."
+  echo ""
+  echo "👉 In Garmin Connect IQ, compiler 'monkeyc' needs the device profile to build for '$DEVICE'."
+  echo "   How to download in 10 seconds:"
+  echo "   1. Open 'SdkManager' (already launched, or run: open -a SdkManager)"
+  echo "   2. In SdkManager, switch to the 'Devices' tab"
+  echo "   3. Search 'Forerunner 255 Music' (fr255m) and 'Forerunner 255' (fr255)"
+  echo "   4. Click 'Download' next to them"
+  echo ""
+  echo "   Once downloaded, re-run: npm run build:garmin"
+  exit 1
+fi
+
 echo "⌚ Building dist/Hagane.prg for device '$DEVICE' (Forerunner 255 Music 46mm)..."
 "$MONKEYC" \
   -o dist/Hagane.prg \

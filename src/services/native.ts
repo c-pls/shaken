@@ -2,7 +2,7 @@ import { Capacitor } from '@capacitor/core';
 import { StatusBar, Style } from '@capacitor/status-bar';
 
 /**
- * Configures the native mobile status bar to match Shaken's light theme.
+ * Configures the native mobile status bar to match Hagane's light theme.
  */
 export const initNativeStatusBar = async () => {
   if (!Capacitor.isNativePlatform()) return;

@@ -1,15 +1,15 @@
 import { Filesystem, Directory, Encoding } from '@capacitor/filesystem';
 import { Capacitor } from '@capacitor/core';
 import { Routine, Exercise } from '../types/gym';
+import { sanitizeCustomExercises, sanitizeRoutines } from './storage';
 
-const BACKUP_DIR = 'Shaken';
-const BACKUP_FILE = 'shaken_backup.json';
+const BACKUP_DIR = 'Hagane';
+const BACKUP_FILE = 'hagane_backup.json';
 
-export interface ShakenDeviceBackup {
+export interface HaganeDeviceBackup {
   version: number;
   timestamp: number;
   routines: Routine[];
-  comments?: Record<string, string>;
   customExercises?: Exercise[];
 }
 
@@ -20,7 +20,6 @@ export interface ShakenDeviceBackup {
  */
 export async function autoSaveToDevice(
   routines: Routine[],
-  comments: Record<string, string> = {},
   customExercises: Exercise[] = []
 ): Promise<boolean> {
   if (!Capacitor.isNativePlatform()) {
@@ -28,17 +27,15 @@ export async function autoSaveToDevice(
   }
 
   try {
-    const payload: ShakenDeviceBackup = {
+    const payload: HaganeDeviceBackup = {
       version: 1,
       timestamp: Date.now(),
       routines,
-      comments,
       customExercises,
     };
 
     const data = JSON.stringify(payload, null, 2);
 
-    // Ensure the Shaken folder exists in Documents
     try {
       await Filesystem.mkdir({
         path: BACKUP_DIR,
@@ -49,7 +46,6 @@ export async function autoSaveToDevice(
       // directory likely already exists
     }
 
-    // Write file to /Documents/Shaken/shaken_backup.json
     await Filesystem.writeFile({
       path: `${BACKUP_DIR}/${BACKUP_FILE}`,
       data,
@@ -59,7 +55,7 @@ export async function autoSaveToDevice(
 
     return true;
   } catch (err) {
-    console.warn('[Shaken] Error saving backup to device Documents:', err);
+    console.warn('[Hagane] Error saving backup to device Documents:', err);
     return false;
   }
 }
@@ -67,7 +63,6 @@ export async function autoSaveToDevice(
 let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 let pendingSaveArgs: {
   routines: Routine[];
-  comments: Record<string, string>;
   customExercises: Exercise[];
 } | null = null;
 let isWriting = false;
@@ -78,23 +73,24 @@ let isWriting = false;
  */
 export function debouncedAutoSaveToDevice(
   routines: Routine[],
-  comments: Record<string, string> = {},
   customExercises: Exercise[] = [],
   delayMs = 500
 ): void {
   if (!Capacitor.isNativePlatform()) return;
 
-  pendingSaveArgs = { routines, comments, customExercises };
+  pendingSaveArgs = { routines, customExercises };
   if (debounceTimer) clearTimeout(debounceTimer);
 
   debounceTimer = setTimeout(async () => {
+    debounceTimer = null;
     if (isWriting) {
-      debouncedAutoSaveToDevice(
-        pendingSaveArgs!.routines,
-        pendingSaveArgs!.comments,
-        pendingSaveArgs!.customExercises,
-        150
-      );
+      if (pendingSaveArgs) {
+        debouncedAutoSaveToDevice(
+          pendingSaveArgs.routines,
+          pendingSaveArgs.customExercises,
+          150
+        );
+      }
       return;
     }
     if (!pendingSaveArgs) return;
@@ -102,7 +98,7 @@ export function debouncedAutoSaveToDevice(
     pendingSaveArgs = null;
     isWriting = true;
     try {
-      await autoSaveToDevice(toSave.routines, toSave.comments, toSave.customExercises);
+      await autoSaveToDevice(toSave.routines, toSave.customExercises);
     } finally {
       isWriting = false;
     }
@@ -110,10 +106,37 @@ export function debouncedAutoSaveToDevice(
 }
 
 /**
- * Check and restore routines from the device's public Documents folder.
- * Called on startup when local state is empty or when the user taps "Restore from Device".
+ * Immediately flushes any pending debounced device backup when the app enters background.
  */
-export async function autoLoadFromDevice(): Promise<ShakenDeviceBackup | null> {
+export function flushPendingDeviceSave(): void {
+  if (!Capacitor.isNativePlatform() || !pendingSaveArgs) return;
+  if (debounceTimer) {
+    clearTimeout(debounceTimer);
+    debounceTimer = null;
+  }
+  if (isWriting) {
+    // Write in flight: do not discard args! Schedule immediate retry
+    setTimeout(() => {
+      flushPendingDeviceSave();
+    }, 60);
+    return;
+  }
+  const toSave = pendingSaveArgs;
+  pendingSaveArgs = null;
+  isWriting = true;
+  autoSaveToDevice(toSave.routines, toSave.customExercises).finally(() => {
+    isWriting = false;
+    if (pendingSaveArgs) {
+      flushPendingDeviceSave();
+    }
+  });
+}
+
+/**
+ * Check and restore routines from the device's public Documents folder.
+ * Validates and normalizes all routines and custom exercises via `sanitizeRoutines` / `sanitizeCustomExercises`.
+ */
+export async function autoLoadFromDevice(): Promise<HaganeDeviceBackup | null> {
   if (!Capacitor.isNativePlatform()) {
     return null;
   }
@@ -126,15 +149,29 @@ export async function autoLoadFromDevice(): Promise<ShakenDeviceBackup | null> {
     });
 
     if (result && typeof result.data === 'string') {
-      const parsed = JSON.parse(result.data) as ShakenDeviceBackup;
-      if (
-        parsed &&
-        Array.isArray(parsed.routines) &&
-        parsed.routines.every(
-          (r) => r && typeof r.id === 'string' && Array.isArray(r.exercises)
-        )
-      ) {
-        return parsed;
+      try {
+        const parsed = JSON.parse(result.data) as Record<string, unknown>;
+        if (parsed && Array.isArray(parsed.routines)) {
+          const legacyComments =
+            parsed.comments && typeof parsed.comments === 'object'
+              ? (parsed.comments as Record<string, string>)
+              : {};
+          const sanitizedRoutines = sanitizeRoutines(
+            parsed.routines,
+            legacyComments
+          );
+          const sanitizedCustom = sanitizeCustomExercises(parsed.customExercises);
+          const ts = Number(parsed.timestamp);
+
+          return {
+            version: Number(parsed.version) || 1,
+            timestamp: Number.isFinite(ts) && ts > 0 ? ts : 0,
+            routines: sanitizedRoutines,
+            customExercises: sanitizedCustom,
+          };
+        }
+      } catch (parseErr) {
+        console.error('[Hagane] Backup file exists on device but is corrupted or malformed:', parseErr);
       }
     }
     return null;

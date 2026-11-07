@@ -1,4 +1,4 @@
-package com.shaken.app;
+package com.hagane.app;
 
 import android.os.Bundle;
 import com.getcapacitor.BridgeActivity;

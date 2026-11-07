@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   build-apk:
-    name: Build Shaken Android APK
+    name: Build Hagane Android APK
     runs-on: ubuntu-latest
 
     steps:
@@ -63,7 +63,6 @@ jobs:
         run: |
           mkdir -p release-output
           cp android/app/build/outputs/apk/release/app-release.apk release-output/hagane.apk
-          cp android/app/build/outputs/apk/release/app-release.apk release-output/shaken.apk
           ls -lh release-output/
 
       - name: Upload APK Artifact
@@ -84,7 +83,7 @@ jobs:
           generate_release_notes: true
           body: |
             ## ⚔️ Hagane - Forge Your Steel APK
-            > *"Forge your steel — Rèn thép mỗi ngày"*
+            > *"Forge your steel"*
 
             Download and install the APK directly on your Samsung Galaxy or Android phone:
             👉 **[Download hagane.apk](https://github.com/${{ github.repository }}/releases/download/v1.3.${{ github.run_number }}/hagane.apk)**
@@ -96,7 +95,7 @@ jobs:
             - **⏱ Per-Exercise Rest Timers**: Custom rest countdowns (`2:30` compound, `1:30` isolation, `1:00` warm-up) with 360° watch progress ring and overtime tracking.
             - **⚡ Superset 0s Transitions**: Automatic chaining between paired exercises without interruption.
             - **Compact Hevy-Style Exercise Picker**: Search bar right at the top bar, displaying 7–8 exercises above the phone keyboard, with `Most used` / `All exercises` tabs and circular `(?)` preview buttons.
-            - **199 Offline Exercises**: Full 1080p 30-FPS male demo videos bundled directly in the app.
+            - **197 Offline Exercises**: Full 1080p 30-FPS male demo videos bundled directly in the app.
             - **1-Click Language Switcher**: Tap `🇺🇸 EN` or `🇻🇳 VI` in the header for instant switching.
             - **Offline & Backup**: 100% offline functionality with persistent device storage.
 
@@ -108,7 +107,6 @@ jobs:
             4. Open **Hagane** and enjoy your workouts!
           files: |
             release-output/hagane.apk
-            release-output/shaken.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

@@ -8,10 +8,10 @@ import Toybox.Sensor;
 import Toybox.Timer;
 import Toybox.WatchUi;
 
-class ShakenSyncConnectListener extends Communications.ConnectionListener {
-    private var _state as ShakenWorkoutState;
+class HaganeSyncConnectListener extends Communications.ConnectionListener {
+    private var _state as HaganeWorkoutState;
 
-    function initialize(state as ShakenWorkoutState) {
+    function initialize(state as HaganeWorkoutState) {
         ConnectionListener.initialize();
         _state = state;
     }
@@ -25,7 +25,7 @@ class ShakenSyncConnectListener extends Communications.ConnectionListener {
     }
 }
 
-class ShakenWorkoutState {
+class HaganeWorkoutState {
     // Screens / States
     public static const STATE_ROUTINE_LIST = 0;
     public static const STATE_ACTIVE_SET   = 1;
@@ -101,7 +101,7 @@ class ShakenWorkoutState {
 
     function loadFromStorage() as Void {
         try {
-            var saved = Storage.getValue("shaken_routines");
+            var saved = Storage.getValue("hagane_routines");
             if (saved != null && (saved instanceof Array)) {
                 routines = sanitizeRoutines(saved as Array);
             } else {
@@ -164,7 +164,7 @@ class ShakenWorkoutState {
             Communications.transmit(
                 { "cmd" => "SYNC_ROUTINES" },
                 null,
-                new ShakenSyncConnectListener(self)
+                new HaganeSyncConnectListener(self)
             );
         } catch (ex) {
             if (!silent) {

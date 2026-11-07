@@ -24,6 +24,7 @@ interface ExerciseDetailProps {
   replacingExIdx?: number | null;
   allExercises?: Exercise[];
   onSelectExercise?: (exerciseId: string) => void;
+  onDeleteCustomExercise?: (exerciseId: string) => void;
 }
 
 export const ExerciseDetail: React.FC<ExerciseDetailProps> = ({
@@ -38,9 +39,11 @@ export const ExerciseDetail: React.FC<ExerciseDetailProps> = ({
   onAddExerciseToRoutine,
   allExercises = [],
   onSelectExercise,
+  onDeleteCustomExercise,
 }) => {
   const t = UI_TEXT[lang];
   const [noteText, setNoteText] = useState(comment);
+  const [confirmDeleteCustom, setConfirmDeleteCustom] = useState(false);
   const lastSavedNoteRef = useRef<string>(comment);
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
@@ -89,19 +92,21 @@ export const ExerciseDetail: React.FC<ExerciseDetailProps> = ({
       {/* LEFT / TOP COLUMN: 1. Seamless Loop Video -> 2. Instructions */}
       <div className="space-y-4">
         {/* 1. CONTINUOUS LOOP VIDEO CARD (Crisp native 1080p, fits all exercises without clipping or blur) */}
-        <div className="bg-white rounded-[24px] shadow-xs overflow-hidden flex items-center justify-center p-2.5">
-          <video
-            ref={videoRef}
-            src={exercise.videoUrl}
-            autoPlay
-            loop
-            muted
-            playsInline
-            disablePictureInPicture
-            onContextMenu={(e) => e.preventDefault()}
-            className="w-full aspect-[16/9] max-h-[340px] object-contain pointer-events-none select-none rounded-xl"
-          />
-        </div>
+        {exercise.videoUrl && (
+          <div className="bg-white rounded-[24px] shadow-xs overflow-hidden flex items-center justify-center p-2.5">
+            <video
+              ref={videoRef}
+              src={exercise.videoUrl}
+              autoPlay
+              loop
+              muted
+              playsInline
+              disablePictureInPicture
+              onContextMenu={(e) => e.preventDefault()}
+              className="w-full aspect-[16/9] max-h-[340px] object-contain pointer-events-none select-none rounded-xl"
+            />
+          </div>
+        )}
 
         {/* 2. STEP-BY-STEP INSTRUCTIONS DIRECTLY BELOW VIDEO */}
         <div className="space-y-2.5">
@@ -203,6 +208,43 @@ export const ExerciseDetail: React.FC<ExerciseDetailProps> = ({
                     : t.addDirectlyToMain}
               </span>
             </button>
+          </div>
+        )}
+
+        {/* 5. DELETE CUSTOM EXERCISE ACTION (Only for user-created custom exercises) */}
+        {exercise.id.startsWith('custom-') && onDeleteCustomExercise && (
+          <div className="pt-2">
+            {!confirmDeleteCustom ? (
+              <button
+                type="button"
+                onClick={() => setConfirmDeleteCustom(true)}
+                className="w-full py-2.5 px-4 rounded-xl bg-red-50 hover:bg-red-100 text-red-600 text-xs font-bold transition cursor-pointer"
+              >
+                🗑️ {t.deleteCustomExerciseBtn}
+              </button>
+            ) : (
+              <div className="bg-red-50/80 border border-red-200 rounded-2xl p-3.5 flex items-center justify-between gap-2">
+                <span className="text-xs font-bold text-red-800">
+                  {t.deleteCustomConfirmTitle}
+                </span>
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => setConfirmDeleteCustom(false)}
+                    className="px-3 py-1.5 rounded-xl bg-white text-slate-700 text-xs font-bold cursor-pointer"
+                  >
+                    {t.cancel}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onDeleteCustomExercise(exercise.id)}
+                    className="px-3 py-1.5 rounded-xl bg-red-600 hover:bg-red-700 text-white text-xs font-bold cursor-pointer"
+                  >
+                    {t.confirmDeleteBtn}
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>

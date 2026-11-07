@@ -1,4 +1,4 @@
-package com.shaken.app;
+package com.hagane.app;
 
 import android.content.Context;
 import android.content.SharedPreferences;
@@ -27,11 +27,11 @@ import org.json.JSONObject;
 @CapacitorPlugin(name = "GarminSync")
 public class GarminSyncPlugin extends Plugin {
 
-    private static final String TAG = "ShakenGarminSync";
+    private static final String TAG = "HaganeGarminSync";
 
     // Shared App UUID with garmin-watch/manifest.xml
-    public static final String SHAKEN_WATCH_APP_ID = "a3f5c8d2-7b1e-4f9a-8c2d-5e6f7a8b9c0d";
-    private static final String PREFS_NAME = "shaken_garmin_bridge";
+    public static final String HAGANE_WATCH_APP_ID = "a3f5c8d2-7b1e-4f9a-8c2d-5e6f7a8b9c0d";
+    private static final String PREFS_NAME = "hagane_garmin_bridge";
     private static final String KEY_CACHED_PAYLOAD = "cached_english_payload";
 
     private ConnectIQ connectIQ;
@@ -105,7 +105,7 @@ public class GarminSyncPlugin extends Plugin {
 
             if (!sdkReady && !sdkInitializing) {
                 sdkInitializing = true;
-                // autoUI = false so Shaken never pops up intrusive dialogs on the phone
+                // autoUI = false so Hagane never pops up intrusive dialogs on the phone
                 connectIQ.initialize(context, false, new ConnectIQ.ConnectIQListener() {
                     @Override
                     public void onSdkReady() {
@@ -149,7 +149,7 @@ public class GarminSyncPlugin extends Plugin {
             }
             if (devices == null) return;
 
-            final IQApp shakenWatchApp = new IQApp(SHAKEN_WATCH_APP_ID);
+            final IQApp haganeWatchApp = new IQApp(HAGANE_WATCH_APP_ID);
 
             for (final IQDevice device : devices) {
                 if (device == null) continue;
@@ -179,7 +179,7 @@ public class GarminSyncPlugin extends Plugin {
                 // 2. Listen for watch-initiated pull requests ("SYNC_ROUTINES")
                 connectIQ.registerForAppEvents(
                     device,
-                    shakenWatchApp,
+                    haganeWatchApp,
                     new ConnectIQ.IQApplicationEventListener() {
                         @Override
                         public void onMessageReceived(
@@ -252,11 +252,11 @@ public class GarminSyncPlugin extends Plugin {
         try {
             JSONObject payloadObj = new JSONObject(jsonStr);
             Map<String, Object> ciqMap = jsonObjectToMap(payloadObj);
-            IQApp shakenWatchApp = new IQApp(SHAKEN_WATCH_APP_ID);
+            IQApp haganeWatchApp = new IQApp(HAGANE_WATCH_APP_ID);
 
             connectIQ.sendMessage(
                 targetWatch,
-                shakenWatchApp,
+                haganeWatchApp,
                 ciqMap,
                 new ConnectIQ.IQSendMessageListener() {
                     @Override

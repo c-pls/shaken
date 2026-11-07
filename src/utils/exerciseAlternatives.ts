@@ -1,4 +1,5 @@
 import { Exercise } from '../types/gym';
+import { translateEquipment, translateMuscle } from '../i18n/translations';
 
 export interface ExerciseAlternative {
   exercise: Exercise;
@@ -199,10 +200,10 @@ export function getSimilarExercises(
           : `${e.equipment} alternative`;
         reasonVi = isSameEquip
           ? `Cùng chuyển động (${pattern.vi})`
-          : `Thay thế bằng ${e.equipment}`;
+          : `Thay thế bằng ${translateEquipment(e.equipment, 'vi')}`;
       } else if (primaryMatches > 0) {
         reasonEn = `Targets ${target.primaryMuscles[0]}`;
-        reasonVi = `Tác động ${target.primaryMuscles[0]}`;
+        reasonVi = `Tác động ${translateMuscle(target.primaryMuscles[0], 'vi')}`;
       } else {
         reasonEn = 'Alternative variation';
         reasonVi = 'Biến thể tương đương';

@@ -2,6 +2,6 @@
 <resources>
     <string name="app_name">Hagane</string>
     <string name="title_activity_main">Hagane</string>
-    <string name="package_name">com.shaken.app</string>
-    <string name="custom_url_scheme">com.shaken.app</string>
+    <string name="package_name">com.hagane.app</string>
+    <string name="custom_url_scheme">com.hagane.app</string>
 </resources>

@@ -22,6 +22,8 @@ interface SetNumberInputProps {
   isDecimal?: boolean;
   className?: string;
   min?: number;
+  max?: number;
+  ariaLabel?: string;
 }
 
 /**
@@ -36,9 +38,20 @@ const SetNumberInput: React.FC<SetNumberInputProps> = ({
   isDecimal = false,
   className = '',
   min = 0,
+  max,
+  ariaLabel,
 }) => {
   const [draft, setDraft] = useState<string>(value.toString());
   const [isFocused, setIsFocused] = useState(false);
+  const selectTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (selectTimerRef.current) {
+        clearTimeout(selectTimerRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (!isFocused) {
@@ -72,7 +85,8 @@ const SetNumberInput: React.FC<SetNumberInputProps> = ({
     const target = e.target;
     // Auto-select entire number on tap so typing immediately overwrites old number
     // Timeout defeats Android WebView touch-release caret placement
-    setTimeout(() => {
+    if (selectTimerRef.current) clearTimeout(selectTimerRef.current);
+    selectTimerRef.current = window.setTimeout(() => {
       try {
         target.select();
       } catch {
@@ -83,12 +97,15 @@ const SetNumberInput: React.FC<SetNumberInputProps> = ({
 
   const handleBlur = () => {
     setIsFocused(false);
+    const ceiling = max ?? 1000;
     if (draft === '' || draft === '.') {
       onChange(min);
       setDraft(min.toString());
     } else {
       const parsed = parseFloat(draft);
-      const safe = Number.isNaN(parsed) ? min : Math.max(min, parsed);
+      const safe = Number.isNaN(parsed)
+        ? min
+        : Math.min(ceiling, Math.max(min, parsed));
       onChange(safe);
       setDraft(safe.toString());
     }
@@ -102,6 +119,7 @@ const SetNumberInput: React.FC<SetNumberInputProps> = ({
       autoCorrect="off"
       autoCapitalize="off"
       spellCheck={false}
+      aria-label={ariaLabel}
       value={isFocused ? draft : value.toString()}
       onChange={handleChange}
       onKeyDown={handleKeyDown}
@@ -203,6 +221,13 @@ export const RoutineDetail: React.FC<RoutineDetailProps> = ({
     }
   }, [isEditMode]);
 
+  useEffect(() => {
+    document.body.dataset.dragging = draggedIdx !== null ? 'true' : '';
+    return () => {
+      document.body.dataset.dragging = '';
+    };
+  }, [draggedIdx]);
+
   const warmupIndices = useMemo(
     () =>
       routine.exercises
@@ -243,18 +268,23 @@ export const RoutineDetail: React.FC<RoutineDetailProps> = ({
     const groups: Record<string, number[]> = {};
     routine.exercises.forEach((item, idx) => {
       if (item.supersetId) {
-        if (!groups[item.supersetId]) groups[item.supersetId] = [];
-        groups[item.supersetId].push(idx);
+        const scopedKey = `${item.isWarmup ? 'W' : 'M'}:${item.supersetId}`;
+        if (!groups[scopedKey]) groups[scopedKey] = [];
+        groups[scopedKey].push(idx);
       }
     });
 
     const groupIdToLetter: Record<string, string> = {};
-    let letterCode = 65; // ASCII 'A'
-    Object.keys(groups).forEach((id) => {
-      const indices = groups[id];
+    let groupIdx = 0;
+    Object.keys(groups).forEach((scopedKey) => {
+      const indices = groups[scopedKey];
       if (indices.length >= 2) {
-        const letter = String.fromCharCode(letterCode++);
-        groupIdToLetter[id] = letter;
+        const letter =
+          groupIdx < 26
+            ? String.fromCharCode(65 + groupIdx)
+            : `S${groupIdx + 1}`;
+        groupIdx++;
+        groupIdToLetter[scopedKey] = letter;
         indices.forEach((idx, pos) => {
           supersetInfo[idx] = {
             groupLetter: letter,
@@ -275,21 +305,22 @@ export const RoutineDetail: React.FC<RoutineDetailProps> = ({
       indices.forEach((idx) => {
         const item = routine.exercises[idx];
         const sId = item.supersetId;
-        const isRealSuperset = Boolean(sId && groupIdToLetter[sId]);
+        const scopedKey = sId ? `${item.isWarmup ? 'W' : 'M'}:${sId}` : '';
+        const isRealSuperset = Boolean(scopedKey && groupIdToLetter[scopedKey]);
 
-        if (isRealSuperset && sId) {
-          if (seenGroupNum[sId] === undefined) {
-            seenGroupNum[sId] = currentNum;
+        if (isRealSuperset && scopedKey) {
+          if (seenGroupNum[scopedKey] === undefined) {
+            seenGroupNum[scopedKey] = currentNum;
             currentNum++;
           }
-          const count = seenGroupCount[sId] || 0;
-          seenGroupCount[sId] = count + 1;
+          const count = seenGroupCount[scopedKey] || 0;
+          seenGroupCount[scopedKey] = count + 1;
           const subLetter = count < 26 ? String.fromCharCode(65 + count) : `${count + 1}`;
 
           orderMap[idx] = {
-            orderLabel: `${seenGroupNum[sId]}${subLetter}`,
+            orderLabel: `${seenGroupNum[scopedKey]}${subLetter}`,
             isSuperset: true,
-            groupLetter: groupIdToLetter[sId],
+            groupLetter: groupIdToLetter[scopedKey],
           };
         } else {
           orderMap[idx] = {
@@ -310,14 +341,28 @@ export const RoutineDetail: React.FC<RoutineDetailProps> = ({
   const handleLinkSupersetWithNext = (exIndex: number) => {
     const current = routine.exercises[exIndex];
     const nextIdx = exIndex + 1;
-    if (nextIdx >= routine.exercises.length) return;
+    if (!current || nextIdx >= routine.exercises.length) return;
     const next = routine.exercises[nextIdx];
+    if (!next || Boolean(current.isWarmup) !== Boolean(next.isWarmup)) return;
 
-    const groupId = current.supersetId || next.supersetId || `ss-${Date.now()}`;
     const oldCurrentGroup = current.supersetId;
     const oldNextGroup = next.supersetId;
 
+    // Guard against silent mass merge of two existing distinct superset groups (M4)
+    if (oldCurrentGroup && oldNextGroup && oldCurrentGroup !== oldNextGroup) {
+      const confirmMerge = window.confirm(
+        lang === 'vi'
+          ? 'Cả hai bài tập đều đang thuộc 2 nhóm Superset khác nhau. Bạn có muốn gộp chung thành một nhóm lớn?'
+          : 'Both exercises belong to different Superset groups. Do you want to merge them into a single group?'
+      );
+      if (!confirmMerge) return;
+    }
+
+    const isWarmupSection = Boolean(current.isWarmup);
+    const groupId = current.supersetId || next.supersetId || `ss-${Date.now()}`;
+
     const nextExercises = routine.exercises.map((item, idx) => {
+      if (Boolean(item.isWarmup) !== isWarmupSection) return item;
       if (
         idx === exIndex ||
         idx === nextIdx ||
@@ -364,10 +409,15 @@ export const RoutineDetail: React.FC<RoutineDetailProps> = ({
     field: 'weight' | 'reps',
     value: number
   ) => {
+    const clampedValue =
+      field === 'weight'
+        ? Math.min(1000, Math.max(0, Math.round(value * 10) / 10))
+        : Math.min(500, Math.max(1, Math.round(value)));
+
     const nextExercises = routine.exercises.map((item, idx) => {
       if (idx !== exIndex) return item;
       const nextSets = item.sets.map((s, sIdx) =>
-        sIdx === setIndex ? { ...s, [field]: Math.max(0, value) } : s
+        sIdx === setIndex ? { ...s, [field]: clampedValue } : s
       );
       return { ...item, sets: nextSets };
     });
@@ -380,8 +430,13 @@ export const RoutineDetail: React.FC<RoutineDetailProps> = ({
       if (idx !== exIndex) return item;
       const nextSets: WorkoutSet[] = item.sets.map((s, sIdx) => {
         if (sIdx !== setIndex) return s;
-        const nextType: 'normal' | 'warmup' =
-          s.type === 'warmup' ? 'normal' : 'warmup';
+        // Cycle: normal -> warmup -> drop -> normal
+        const nextType: 'normal' | 'warmup' | 'drop' =
+          s.type === 'normal'
+            ? 'warmup'
+            : s.type === 'warmup'
+              ? 'drop'
+              : 'normal';
         return { ...s, type: nextType };
       });
       return { ...item, sets: nextSets };
@@ -603,7 +658,44 @@ export const RoutineDetail: React.FC<RoutineDetailProps> = ({
 
   const renderExerciseCard = (item: RoutineExerciseItem, exIdx: number) => {
     const ex = exercisesMap[item.exerciseId];
-    if (!ex) return null;
+    if (!ex) {
+      return (
+        <div
+          key={`missing-${item.exerciseId}-${exIdx}`}
+          data-routine-card-idx={exIdx}
+          className="bg-white rounded-[24px] p-4 shadow-xs border border-amber-200 flex items-center justify-between gap-3"
+        >
+          <div className="min-w-0 space-y-0.5">
+            <h3 className="font-bold text-sm text-slate-900 truncate">
+              {t.unknownExerciseTitle} ({item.exerciseId})
+            </h3>
+            <p className="text-xs text-slate-500">{t.unknownExerciseDesc}</p>
+          </div>
+          <div className="flex items-center gap-1.5 shrink-0">
+            <button
+              type="button"
+              onClick={() =>
+                onOpenPicker({
+                  asWarmup: Boolean(item.isWarmup),
+                  replacingExIdx: exIdx,
+                  fromEditMode: isEditMode,
+                })
+              }
+              className="px-3 py-1.5 rounded-xl bg-blue-50 hover:bg-blue-100 text-blue-600 text-xs font-bold cursor-pointer"
+            >
+              {t.changeExerciseBtn}
+            </button>
+            <button
+              type="button"
+              onClick={() => setConfirmRemoveExIdx(exIdx)}
+              className="px-3 py-1.5 rounded-xl bg-red-50 hover:bg-red-100 text-red-600 text-xs font-bold cursor-pointer"
+            >
+              {t.confirmDeleteBtn}
+            </button>
+          </div>
+        </div>
+      );
+    }
     const note = item.note || '';
     const displayName = lang === 'vi' && ex.nameVi ? ex.nameVi : ex.name;
     const isWarmupEx = Boolean(item.isWarmup);
@@ -817,7 +909,7 @@ export const RoutineDetail: React.FC<RoutineDetailProps> = ({
               type="button"
               onClick={() => onOpenExerciseInfo(ex.id, exIdx)}
               aria-label="View exercise details"
-              className="w-8 h-8 rounded-full bg-slate-100 hover:bg-blue-600 text-slate-700 hover:text-white font-serif italic font-bold text-sm flex items-center justify-center transition cursor-pointer"
+              className="w-9 h-9 rounded-full bg-slate-100 hover:bg-blue-600 text-slate-700 hover:text-white font-serif italic font-bold text-sm flex items-center justify-center transition cursor-pointer"
             >
               i
             </button>
@@ -828,7 +920,7 @@ export const RoutineDetail: React.FC<RoutineDetailProps> = ({
                   type="button"
                   onClick={() => setOpenMenuExIdx(isMenuOpen ? null : exIdx)}
                   aria-label="Exercise options"
-                  className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold text-base flex items-center justify-center transition cursor-pointer"
+                  className="w-9 h-9 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold text-base flex items-center justify-center transition cursor-pointer"
                 >
                   ⋮
                 </button>
@@ -979,11 +1071,12 @@ export const RoutineDetail: React.FC<RoutineDetailProps> = ({
         <div className="divide-y divide-slate-100">
           {item.sets.map((set, setIdx) => {
             const isWarmupSet = set.type === 'warmup';
+            const isDropSet = set.type === 'drop';
             const workingSetNum =
               item.sets
                 .slice(0, setIdx)
-                .filter((s) => s.type !== 'warmup').length + 1;
-            const setBadgeLabel = isWarmupSet ? t.warmupSetTag : workingSetNum;
+                .filter((s) => s.type !== 'warmup' && s.type !== 'drop').length + 1;
+            const setBadgeLabel = isWarmupSet ? t.warmupSetTag : isDropSet ? 'D' : workingSetNum;
 
             return (
               <div
@@ -996,25 +1089,38 @@ export const RoutineDetail: React.FC<RoutineDetailProps> = ({
                     <button
                       type="button"
                       onClick={() => handleToggleSetType(exIdx, setIdx)}
+                      aria-label={
+                        isWarmupSet
+                          ? `${t.warmupBadge} (Click to toggle drop set)`
+                          : isDropSet
+                            ? 'Drop Set (Click to toggle working set)'
+                            : 'Working Set (Click to toggle warmup set)'
+                      }
                       title={
                         isWarmupSet
-                          ? `${t.warmupBadge} (Click to toggle working set)`
-                          : `Working Set (Click to toggle warmup set)`
+                          ? `${t.warmupBadge} (Click to toggle drop set)`
+                          : isDropSet
+                            ? 'Drop Set (Click to toggle working set)'
+                            : 'Working Set (Click to toggle warmup set)'
                       }
-                      className={`w-7 h-7 rounded-full font-bold text-xs flex items-center justify-center transition cursor-pointer shadow-xs ${
+                      className={`w-8 h-8 rounded-full font-bold text-xs flex items-center justify-center transition cursor-pointer shadow-xs ${
                         isWarmupSet
                           ? 'bg-amber-500 hover:bg-amber-600 text-white ring-2 ring-amber-300'
-                          : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
+                          : isDropSet
+                            ? 'bg-purple-600 hover:bg-purple-700 text-white ring-2 ring-purple-300'
+                            : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
                       }`}
                     >
                       {setBadgeLabel}
                     </button>
                   ) : (
                     <span
-                      className={`w-6 h-6 rounded-full font-bold text-xs flex items-center justify-center ${
+                      className={`w-7 h-7 rounded-full font-bold text-xs flex items-center justify-center ${
                         isWarmupSet
                           ? 'bg-amber-100 text-amber-800 border border-amber-300 font-extrabold'
-                          : 'bg-slate-100 text-slate-700'
+                          : isDropSet
+                            ? 'bg-purple-100 text-purple-800 border border-purple-300 font-extrabold'
+                            : 'bg-slate-100 text-slate-700'
                       }`}
                     >
                       {setBadgeLabel}
@@ -1029,6 +1135,8 @@ export const RoutineDetail: React.FC<RoutineDetailProps> = ({
                       <SetNumberInput
                         value={set.weight}
                         isDecimal
+                        max={1000}
+                        ariaLabel={`${displayName} set ${setIdx + 1} weight kg`}
                         onChange={(newWeight) =>
                           handleSetChange(exIdx, setIdx, 'weight', newWeight)
                         }
@@ -1057,6 +1165,8 @@ export const RoutineDetail: React.FC<RoutineDetailProps> = ({
                       <SetNumberInput
                         value={set.reps}
                         min={1}
+                        max={500}
+                        ariaLabel={`${displayName} set ${setIdx + 1} reps`}
                         onChange={(newReps) =>
                           handleSetChange(exIdx, setIdx, 'reps', newReps)
                         }

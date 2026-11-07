@@ -16,14 +16,15 @@ import {
   UI_TEXT,
 } from './i18n/translations';
 import {
+  clearStorageCorruptionLock,
   deduplicateRoutineExercises,
   getAllExercises,
+  getCorruptBackupRaw,
   getDefaultRestSeconds,
-  loadComments,
+  isStorageCorruptionLocked,
   loadCustomExercises,
   loadLanguage,
   loadRoutines,
-  saveComments,
   saveCustomExercises,
   saveLanguage,
   saveRoutines,
@@ -41,9 +42,12 @@ import {
 import {
   autoLoadFromDevice,
   debouncedAutoSaveToDevice,
+  flushPendingDeviceSave,
+  HaganeDeviceBackup,
 } from './services/deviceStorage';
 import {
   debouncedUpdateGarminWatchCache,
+  flushGarminWatchCache,
 } from './services/garminSync';
 
 export const App: React.FC = () => {
@@ -56,12 +60,15 @@ export const App: React.FC = () => {
       ),
     }))
   );
-  const [comments, setComments] = useState<Record<string, string>>(() =>
-    loadComments()
-  );
   const [customExercises, setCustomExercises] = useState<Exercise[]>(() =>
     loadCustomExercises()
   );
+  const [isCorruptLocked, setIsCorruptLocked] = useState<boolean>(() =>
+    isStorageCorruptionLocked()
+  );
+  const [showCorruptModal, setShowCorruptModal] = useState<boolean>(false);
+  const [pendingBackupRestore, setPendingBackupRestore] =
+    useState<HaganeDeviceBackup | null>(null);
 
   const [activeTab, setActiveTab] = useState<ActiveTab>('routines');
   const [wikiSearch, setWikiSearch] = useState<string>('');
@@ -151,35 +158,71 @@ export const App: React.FC = () => {
           );
           const backupTimestamp = backup.timestamp || 0;
 
-          // Safe restore: only restore on true fresh install (localTimestamp === 0 with non-empty backup)
-          // or when device backup is strictly newer than the local store
-          const shouldRestore =
-            (localTimestamp === 0 && backup.routines.length > 0) ||
-            (backupTimestamp > 0 && backupTimestamp > localTimestamp);
-
-          if (shouldRestore) {
+          if (
+            routines.length === 0 &&
+            localTimestamp === 0 &&
+            backup.routines.length > 0 &&
+            !isStorageCorruptionLocked()
+          ) {
+            // True fresh install / reinstall with empty local state -> auto-restore immediately
             setRoutines(backup.routines);
             saveRoutines(backup.routines);
-            if (backup.comments) {
-              setComments(backup.comments);
-              saveComments(backup.comments);
-            }
             if (backup.customExercises) {
               setCustomExercises(backup.customExercises);
               saveCustomExercises(backup.customExercises);
             }
-            if (backup.routines.length > 0) {
-              const currentLang = loadLanguage();
-              showToast(
-                currentLang === 'vi'
-                  ? 'Đã tự động khôi phục giáo án từ bộ nhớ máy'
-                  : 'Auto-restored routines from device storage'
-              );
-            }
+            const currentLang = loadLanguage();
+            showToast(
+              currentLang === 'vi'
+                ? 'Đã tự động khôi phục giáo án từ bộ nhớ máy'
+                : 'Auto-restored routines from device storage'
+            );
+          } else if (
+            backup.routines.length > 0 &&
+            (isStorageCorruptionLocked() ||
+              (backupTimestamp > 0 && backupTimestamp > localTimestamp))
+          ) {
+            // Existing local data or corrupt state -> ask user for confirmation before overwriting
+            setPendingBackupRestore(backup);
           }
         }
       })
-      .catch(() => {});
+      .catch((err) => {
+        console.warn('[Hagane] Device backup check failed:', err);
+      });
+  }, []);
+
+  // Immediately flush any pending debounced Garmin watch cache or device backup on app pause / background
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        flushGarminWatchCache();
+        flushPendingDeviceSave();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('pagehide', handleVisibilityChange);
+
+    let appStateHandle: { remove: () => void } | null = null;
+    let isMounted = true;
+    if (Capacitor.isNativePlatform()) {
+      CapApp.addListener('appStateChange', ({ isActive }) => {
+        if (!isActive) {
+          flushGarminWatchCache();
+          flushPendingDeviceSave();
+        }
+      }).then((h) => {
+        if (!isMounted) h.remove();
+        else appStateHandle = h;
+      });
+    }
+
+    return () => {
+      isMounted = false;
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('pagehide', handleVisibilityChange);
+      if (appStateHandle) appStateHandle.remove();
+    };
   }, []);
 
   // Disable text copying on Mobile only (PC can freely select and copy for debugging)
@@ -237,14 +280,25 @@ export const App: React.FC = () => {
     route.name === 'routineDetail' ||
     route.name === 'exercisePicker';
 
+  const lastBackNavigationTimeRef = useRef<number>(0);
+
   const handleNavigateBack = () => {
+    const now = Date.now();
+    // Guard against Android hardware/gesture back + web touch event double-firing within 350ms (M6)
+    if (now - lastBackNavigationTimeRef.current < 350) {
+      return;
+    }
+    lastBackNavigationTimeRef.current = now;
+
     if (route.name === 'exerciseInfo') {
       const target = route.returnTo;
       setRoute(target);
       if (target.name === 'routineDetail') {
-        restoreRoutineScroll((target as any).savedScrollY);
+        const savedY = 'savedScrollY' in target && typeof target.savedScrollY === 'number' ? target.savedScrollY : undefined;
+        restoreRoutineScroll(savedY);
       } else if (target.name === 'wikiList') {
-        restoreWikiScroll((target as any).savedScrollY);
+        const savedY = 'savedScrollY' in target && typeof target.savedScrollY === 'number' ? target.savedScrollY : undefined;
+        restoreWikiScroll(savedY);
       } else {
         window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
         document.documentElement.scrollTop = 0;
@@ -312,7 +366,7 @@ export const App: React.FC = () => {
   const [swipeProgress, setSwipeProgress] = useState<number | null>(null);
 
   const handleTouchStart = (e: React.TouchEvent) => {
-    if (!canGoBack) return;
+    if (!canGoBack || document.body.dataset.dragging === 'true') return;
     const touch = e.touches[0];
     if (touch && touch.clientX <= 48) {
       touchStartRef.current = {
@@ -324,7 +378,13 @@ export const App: React.FC = () => {
   };
 
   const handleTouchMove = (e: React.TouchEvent) => {
-    if (!touchStartRef.current || !canGoBack) return;
+    if (
+      !touchStartRef.current ||
+      !canGoBack ||
+      document.body.dataset.dragging === 'true'
+    ) {
+      return;
+    }
     const touch = e.touches[0];
     if (!touch) return;
     const dx = touch.clientX - touchStartRef.current.x;
@@ -401,6 +461,19 @@ export const App: React.FC = () => {
     }
   };
 
+  const persistRoutines = (
+    next: Routine[],
+    customList: Exercise[] = customExercises,
+    delayMs = 500
+  ) => {
+    setRoutines(next);
+    const savedOk = saveRoutines(next);
+    if (!savedOk && !isStorageCorruptionLocked()) {
+      showToast(t.toastSaveError);
+    }
+    debouncedAutoSaveToDevice(next, customList, delayMs);
+  };
+
   const handleUpdateRoutine = (updated: Routine) => {
     const cleanedRoutine = {
       ...updated,
@@ -411,9 +484,7 @@ export const App: React.FC = () => {
     const next = routines.map((r) =>
       r.id === cleanedRoutine.id ? cleanedRoutine : r
     );
-    setRoutines(next);
-    saveRoutines(next);
-    debouncedAutoSaveToDevice(next, comments, customExercises);
+    persistRoutines(next);
   };
 
   const handleCreateRoutine = (name: string, tag: string) => {
@@ -424,17 +495,13 @@ export const App: React.FC = () => {
       exercises: [],
     };
     const next = [...routines, newRoutine];
-    setRoutines(next);
-    saveRoutines(next);
-    debouncedAutoSaveToDevice(next, comments, customExercises, 100);
+    persistRoutines(next, customExercises, 100);
     setRoute({ name: 'routineDetail', routineId: newRoutine.id });
   };
 
   const handleDeleteRoutine = (routineId: string) => {
     const next = routines.filter((r) => r.id !== routineId);
-    setRoutines(next);
-    saveRoutines(next);
-    debouncedAutoSaveToDevice(next, comments, customExercises, 100);
+    persistRoutines(next, customExercises, 100);
     showToast(t.toastDeletedRoutine);
   };
 
@@ -451,9 +518,7 @@ export const App: React.FC = () => {
     const next = [...routines];
     const [moved] = next.splice(fromIdx, 1);
     next.splice(toIdx, 0, moved);
-    setRoutines(next);
-    saveRoutines(next);
-    debouncedAutoSaveToDevice(next, comments, customExercises, 100);
+    persistRoutines(next, customExercises, 100);
   };
 
   const handleUpdateRoutineMeta = (
@@ -464,9 +529,7 @@ export const App: React.FC = () => {
     const next = routines.map((r) =>
       r.id === routineId ? { ...r, name, tag } : r
     );
-    setRoutines(next);
-    saveRoutines(next);
-    debouncedAutoSaveToDevice(next, comments, customExercises, 100);
+    persistRoutines(next, customExercises, 100);
   };
 
   const handleSaveRoutineExerciseComment = (
@@ -487,8 +550,29 @@ export const App: React.FC = () => {
   const handleAddCustomExercise = (newExercise: Exercise) => {
     const next = [newExercise, ...customExercises];
     setCustomExercises(next);
-    saveCustomExercises(next);
-    debouncedAutoSaveToDevice(routines, comments, next, 100);
+    if (!saveCustomExercises(next)) {
+      showToast(t.toastSaveError);
+    }
+    debouncedAutoSaveToDevice(routines, next, 100);
+  };
+
+  const handleDeleteCustomExercise = (exerciseId: string) => {
+    const nextCustom = customExercises.filter((e) => e.id !== exerciseId);
+    setCustomExercises(nextCustom);
+    if (!saveCustomExercises(nextCustom)) {
+      showToast(t.toastSaveError);
+    }
+
+    const nextRoutines = routines.map((r) => ({
+      ...r,
+      exercises: sortRoutineExercisesBySection(
+        deduplicateRoutineExercises(
+          r.exercises.filter((item) => item.exerciseId !== exerciseId)
+        )
+      ),
+    }));
+    persistRoutines(nextRoutines, nextCustom, 100);
+    handleNavigateBack();
   };
 
   // Passively keep the Garmin watch payload cache up to date in the background
@@ -542,11 +626,12 @@ export const App: React.FC = () => {
       return true;
     }
 
-    // Default to 1 single set on newly added exercises as requested.
-    // User can customize weight/reps on this 1st set, and tap '+ Hiệp' (+ Add Set) to clone it.
+    // Default to 1 single set on newly added exercises as requested (0 kg for Bodyweight).
+    const isBodyweight = (ex?.equipment || '').toLowerCase() === 'bodyweight';
+    const defaultWeight = isBodyweight ? 0 : asWarmup ? 20 : 60;
     const defaultSets: WorkoutSet[] = asWarmup
-      ? [{ weight: 20, reps: 15, type: 'warmup' }]
-      : [{ weight: 60, reps: 10, type: 'normal' }];
+      ? [{ weight: defaultWeight, reps: 15, type: 'warmup' }]
+      : [{ weight: defaultWeight, reps: 10, type: 'normal' }];
 
     const defaultRest = getDefaultRestSeconds(ex, asWarmup);
 
@@ -746,7 +831,11 @@ export const App: React.FC = () => {
 
             <div className="flex items-center gap-2 shrink-0">
               {toastMessage && (
-                <span className="px-3 py-1 rounded-full bg-emerald-600 text-white text-xs font-bold">
+                <span
+                  role="status"
+                  aria-live="polite"
+                  className="px-3 py-1 rounded-full bg-emerald-600 text-white text-xs font-bold"
+                >
                   {toastMessage}
                 </span>
               )}
@@ -812,7 +901,113 @@ export const App: React.FC = () => {
       )}
 
       {/* Main Content Container */}
-      <main className="max-w-5xl w-full mx-auto px-4 py-5 flex-1">
+      <main className="max-w-5xl w-full mx-auto px-4 py-5 flex-1 space-y-4">
+        {/* Corrupt LocalStorage Recovery Banner (C2) */}
+        {isCorruptLocked && (
+          <div className="bg-amber-50 border border-amber-300 rounded-[24px] p-4 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="space-y-1">
+              <h3 className="font-bold text-sm text-amber-950">
+                ⚠️ {t.corruptStorageTitle}
+              </h3>
+              <p className="text-xs text-amber-800 leading-relaxed">
+                {t.corruptStorageDesc}
+              </p>
+            </div>
+            <div className="flex items-center gap-2 shrink-0 flex-wrap">
+              <button
+                type="button"
+                onClick={() => setShowCorruptModal(true)}
+                className="px-3.5 py-2 rounded-xl bg-amber-100 hover:bg-amber-200 text-amber-900 border border-amber-300 text-xs font-bold cursor-pointer"
+              >
+                {lang === 'vi' ? '📋 Xem dữ liệu' : '📋 View Data'}
+              </button>
+              {pendingBackupRestore && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    clearStorageCorruptionLock();
+                    setIsCorruptLocked(false);
+                    setRoutines(pendingBackupRestore.routines);
+                    saveRoutines(pendingBackupRestore.routines);
+                    if (pendingBackupRestore.customExercises) {
+                      setCustomExercises(pendingBackupRestore.customExercises);
+                      saveCustomExercises(pendingBackupRestore.customExercises);
+                    }
+                    setPendingBackupRestore(null);
+                  }}
+                  className="px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold cursor-pointer"
+                >
+                  {t.restoreNowBtn}
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => {
+                  const confirmFresh = window.confirm(
+                    lang === 'vi'
+                      ? 'Bạn có chắc chắn muốn bắt đầu mới? Dữ liệu lỗi trước đó vẫn được lưu an toàn trong bộ nhớ máy.'
+                      : 'Are you sure you want to start fresh? The corrupt data is preserved in storage.'
+                  );
+                  if (!confirmFresh) return;
+                  clearStorageCorruptionLock(false);
+                  setIsCorruptLocked(false);
+                  saveRoutines(routines);
+                }}
+                className="px-3.5 py-2 rounded-xl bg-white hover:bg-amber-100 text-amber-900 border border-amber-300 text-xs font-bold cursor-pointer"
+              >
+                {t.startFreshBtn}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Newer Device Backup Confirmation Prompt (C3) */}
+        {!isCorruptLocked && pendingBackupRestore && (
+          <div className="bg-blue-50 border border-blue-200 rounded-[24px] p-4 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="space-y-1">
+              <h3 className="font-bold text-sm text-blue-950">
+                🔄 {t.restoreBackupPromptTitle}
+              </h3>
+              <p className="text-xs text-blue-800 leading-relaxed">
+                {t.restoreBackupPromptDesc}
+              </p>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={() => {
+                  setPendingBackupRestore(null);
+                  // Touch local timestamp so we don't re-prompt on next launch unless backup changes again
+                  saveRoutines(routines);
+                }}
+                className="px-3.5 py-2 rounded-xl bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 text-xs font-bold cursor-pointer"
+              >
+                {t.keepLocalBtn}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setRoutines(pendingBackupRestore.routines);
+                  saveRoutines(pendingBackupRestore.routines);
+                  if (pendingBackupRestore.customExercises) {
+                    setCustomExercises(pendingBackupRestore.customExercises);
+                    saveCustomExercises(pendingBackupRestore.customExercises);
+                  }
+                  setPendingBackupRestore(null);
+                  showToast(
+                    lang === 'vi'
+                      ? 'Đã khôi phục giáo án từ bộ nhớ máy'
+                      : 'Restored routines from device storage'
+                  );
+                }}
+                className="px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold cursor-pointer"
+              >
+                {t.restoreNowBtn}
+              </button>
+            </div>
+          </div>
+        )}
+
         {route.name === 'routineList' && (
           <RoutineList
             routines={routines}
@@ -828,137 +1023,167 @@ export const App: React.FC = () => {
           />
         )}
 
-        {route.name === 'routineDetail' && (
-          <RoutineDetail
-            routine={
-              routines.find((r) => r.id === route.routineId) ||
-              routines[0] || {
-                id: 'empty',
-                name: 'Routine',
-                tag: 'Custom',
-                exercises: [],
-              }
-            }
-            isEditMode={isRoutineEditMode}
-            scrollToIndex={route.scrollToIndex}
-            lang={lang}
-            exercisesMap={exercisesMap}
-            allExercises={allExercises}
-            onUpdateRoutine={handleUpdateRoutine}
-            onOpenExerciseInfo={(exerciseId, routineExIndex) => {
-              const currentScroll =
-                window.scrollY ||
-                document.documentElement.scrollTop ||
-                document.body.scrollTop ||
-                0;
-              routineScrollPosRef.current = currentScroll;
-              const activeRoutine =
-                routines.find((r) => r.id === route.routineId) || routines[0];
-              setRoute({
-                name: 'exerciseInfo',
-                exerciseId,
-                routineId: activeRoutine?.id,
-                routineExIndex,
-                returnTo: {
-                  ...route,
-                  initialEditMode: isRoutineEditMode,
-                  savedScrollY: currentScroll,
-                },
-              });
-            }}
-            onOpenPicker={({ asWarmup, replacingExIdx }) => {
-              setRoute({
-                name: 'exercisePicker',
-                routineId: route.routineId,
-                asWarmup,
-                replacingExIdx,
-                fromEditMode: isRoutineEditMode,
-              });
-            }}
-          />
-        )}
-
-        {route.name === 'exercisePicker' && (
-          <ExercisePickerView
-            routine={
-              routines.find((r) => r.id === route.routineId) || routines[0]
-            }
-            asWarmup={route.asWarmup}
-            replacingExIdx={route.replacingExIdx}
-            lang={lang}
-            allExercises={allExercises}
-            initialSearch={route.searchQuery || ''}
-            initialMuscle={route.muscleFilter || 'All'}
-            initialEquipment={route.equipmentFilter || 'All'}
-            onBack={() =>
-              setRoute({
-                name: 'routineDetail',
-                routineId: route.routineId,
-                initialEditMode: route.fromEditMode ?? false,
-              })
-            }
-            onSelectExercise={(exerciseId) => {
-              const targetRoutine =
-                routines.find((r) => r.id === route.routineId) || routines[0];
-              let scrollIdx = 0;
-              if (route.replacingExIdx !== null) {
-                scrollIdx = route.replacingExIdx;
-              } else if (route.asWarmup) {
-                scrollIdx = (targetRoutine?.exercises || []).filter(
-                  (e) => e.isWarmup
-                ).length;
-              } else {
-                scrollIdx = (targetRoutine?.exercises || []).length;
-              }
-
-              const success = handleAddExerciseToRoutine(
-                route.routineId,
-                exerciseId,
-                route.asWarmup,
-                route.replacingExIdx
+        {route.name === 'routineDetail' &&
+          (() => {
+            const activeRoutine = routines.find(
+              (r) => r.id === route.routineId
+            );
+            if (!activeRoutine) {
+              return (
+                <div className="bg-white rounded-[24px] p-8 text-center shadow-xs space-y-3 border border-slate-100">
+                  <p className="font-bold text-base text-slate-900">
+                    {t.routineNotFoundTitle}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setRoute({ name: 'routineList' })}
+                    className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold cursor-pointer"
+                  >
+                    {t.routinesBack}
+                  </button>
+                </div>
               );
-              if (success) {
-                setRoute({
-                  name: 'routineDetail',
-                  routineId: route.routineId,
-                  initialEditMode: true,
-                  scrollToIndex: scrollIdx,
-                });
-              }
-            }}
-            onDuplicateWarning={(exName) => {
-              showToast(
-                lang === 'vi'
-                  ? `⚠️ "${exName}" đã có trong buổi tập! Không thể thêm trùng lặp.`
-                  : `⚠️ "${exName}" is already in this routine! Cannot add duplicate.`
+            }
+            return (
+              <RoutineDetail
+                routine={activeRoutine}
+                isEditMode={isRoutineEditMode}
+                scrollToIndex={route.scrollToIndex}
+                lang={lang}
+                exercisesMap={exercisesMap}
+                allExercises={allExercises}
+                onUpdateRoutine={handleUpdateRoutine}
+                onOpenExerciseInfo={(exerciseId, routineExIndex) => {
+                  const currentScroll =
+                    window.scrollY ||
+                    document.documentElement.scrollTop ||
+                    document.body.scrollTop ||
+                    0;
+                  routineScrollPosRef.current = currentScroll;
+                  setRoute({
+                    name: 'exerciseInfo',
+                    exerciseId,
+                    routineId: activeRoutine.id,
+                    routineExIndex,
+                    returnTo: {
+                      ...route,
+                      initialEditMode: isRoutineEditMode,
+                      savedScrollY: currentScroll,
+                    },
+                  });
+                }}
+                onOpenPicker={({ asWarmup, replacingExIdx }) => {
+                  setRoute({
+                    name: 'exercisePicker',
+                    routineId: activeRoutine.id,
+                    asWarmup,
+                    replacingExIdx,
+                    fromEditMode: isRoutineEditMode,
+                  });
+                }}
+              />
+            );
+          })()}
+
+        {route.name === 'exercisePicker' &&
+          (() => {
+            const targetRoutine = routines.find(
+              (r) => r.id === route.routineId
+            );
+            if (!targetRoutine) {
+              return (
+                <div className="bg-white rounded-[24px] p-8 text-center shadow-xs space-y-3 border border-slate-100">
+                  <p className="font-bold text-base text-slate-900">
+                    {t.routineNotFoundTitle}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setRoute({ name: 'routineList' })}
+                    className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold cursor-pointer"
+                  >
+                    {t.routinesBack}
+                  </button>
+                </div>
               );
-            }}
-            onOpenWiki={(
-              exerciseId,
-              currentSearch,
-              currentMuscle,
-              currentEquipment
-            ) => {
-              setRoute({
-                name: 'exerciseInfo',
-                exerciseId,
-                routineId: route.routineId,
-                asWarmup: route.asWarmup,
-                replacingExIdx: route.replacingExIdx,
-                returnTo: {
-                  name: 'exercisePicker',
-                  routineId: route.routineId,
-                  asWarmup: route.asWarmup,
-                  replacingExIdx: route.replacingExIdx,
-                  fromEditMode: route.fromEditMode,
-                  searchQuery: currentSearch,
-                  muscleFilter: currentMuscle,
-                  equipmentFilter: currentEquipment,
-                },
-              });
-            }}
-          />
-        )}
+            }
+            return (
+              <ExercisePickerView
+                routine={targetRoutine}
+                asWarmup={route.asWarmup}
+                replacingExIdx={route.replacingExIdx}
+                lang={lang}
+                allExercises={allExercises}
+                initialSearch={route.searchQuery || ''}
+                initialMuscle={route.muscleFilter || 'All'}
+                initialEquipment={route.equipmentFilter || 'All'}
+                onBack={() =>
+                  setRoute({
+                    name: 'routineDetail',
+                    routineId: targetRoutine.id,
+                    initialEditMode: route.fromEditMode ?? false,
+                  })
+                }
+                onSelectExercise={(exerciseId) => {
+                  let scrollIdx = 0;
+                  if (route.replacingExIdx !== null) {
+                    scrollIdx = route.replacingExIdx;
+                  } else if (route.asWarmup) {
+                    scrollIdx = (targetRoutine.exercises || []).filter(
+                      (e) => e.isWarmup
+                    ).length;
+                  } else {
+                    scrollIdx = (targetRoutine.exercises || []).length;
+                  }
+
+                  const success = handleAddExerciseToRoutine(
+                    targetRoutine.id,
+                    exerciseId,
+                    route.asWarmup,
+                    route.replacingExIdx
+                  );
+                  if (success) {
+                    setRoute({
+                      name: 'routineDetail',
+                      routineId: targetRoutine.id,
+                      initialEditMode: true,
+                      scrollToIndex: scrollIdx,
+                    });
+                  }
+                }}
+                onDuplicateWarning={(exName) => {
+                  showToast(
+                    lang === 'vi'
+                      ? `⚠️ "${exName}" đã có trong buổi tập! Không thể thêm trùng lặp.`
+                      : `⚠️ "${exName}" is already in this routine! Cannot add duplicate.`
+                  );
+                }}
+                onOpenWiki={(
+                  exerciseId,
+                  currentSearch,
+                  currentMuscle,
+                  currentEquipment
+                ) => {
+                  setRoute({
+                    name: 'exerciseInfo',
+                    exerciseId,
+                    routineId: targetRoutine.id,
+                    asWarmup: route.asWarmup,
+                    replacingExIdx: route.replacingExIdx,
+                    returnTo: {
+                      name: 'exercisePicker',
+                      routineId: targetRoutine.id,
+                      asWarmup: route.asWarmup,
+                      replacingExIdx: route.replacingExIdx,
+                      fromEditMode: route.fromEditMode,
+                      searchQuery: currentSearch,
+                      muscleFilter: currentMuscle,
+                      equipmentFilter: currentEquipment,
+                    },
+                  });
+                }}
+              />
+            );
+          })()}
 
         {route.name === 'wikiList' && (
           <ExerciseWiki
@@ -987,96 +1212,112 @@ export const App: React.FC = () => {
           />
         )}
 
-        {route.name === 'exerciseInfo' && exercisesMap[route.exerciseId] && (
-          <ExerciseDetail
-            exercise={exercisesMap[route.exerciseId]}
-            lang={lang}
-            showComment={
-              Boolean(route.routineId) && route.routineExIndex !== undefined
-            }
-            comment={
-              route.routineId && route.routineExIndex !== undefined
-                ? routines.find((r) => r.id === route.routineId)?.exercises[
-                    route.routineExIndex
-                  ]?.note || ''
-                : ''
-            }
-            onSaveComment={(commentText) =>
-              handleSaveRoutineExerciseComment(
-                route.routineId,
-                route.routineExIndex,
-                commentText
-              )
-            }
-            activeRoutineId={
-              route.routineExIndex === undefined ? route.routineId : undefined
-            }
-            asWarmup={route.asWarmup}
-            replacingExIdx={route.replacingExIdx}
-            allExercises={allExercises}
-            onSelectExercise={(newExId) => {
-              const currentRoutine = routines.find(
-                (r) => r.id === route.routineId
-              );
-              const inferredWarmup =
-                route.asWarmup ??
-                (route.routineExIndex !== undefined
-                  ? Boolean(
-                      currentRoutine?.exercises[route.routineExIndex]?.isWarmup
-                    )
-                  : false);
-              const inferredReplacingIdx =
-                route.replacingExIdx !== undefined
-                  ? route.replacingExIdx
-                  : route.routineExIndex !== undefined
-                    ? route.routineExIndex
-                    : null;
-
-              setRoute({
-                name: 'exerciseInfo',
-                exerciseId: newExId,
-                routineId: route.routineId,
-                routineExIndex: undefined,
-                asWarmup: inferredWarmup,
-                replacingExIdx: inferredReplacingIdx,
-                returnTo: route,
-              });
-            }}
-            onAddExerciseToRoutine={(
-              routineId,
-              exerciseId,
-              asWarmup,
-              replacingExIdx
-            ) => {
-              const targetRoutine = routines.find((r) => r.id === routineId);
-              let scrollIdx = 0;
-              if (replacingExIdx !== null && replacingExIdx !== undefined) {
-                scrollIdx = replacingExIdx;
-              } else if (asWarmup) {
-                scrollIdx = (targetRoutine?.exercises || []).filter(
-                  (e) => e.isWarmup
-                ).length;
-              } else {
-                scrollIdx = (targetRoutine?.exercises || []).length;
+        {route.name === 'exerciseInfo' &&
+          (exercisesMap[route.exerciseId] ? (
+            <ExerciseDetail
+              exercise={exercisesMap[route.exerciseId]}
+              lang={lang}
+              showComment={
+                Boolean(route.routineId) && route.routineExIndex !== undefined
               }
+              comment={
+                route.routineId && route.routineExIndex !== undefined
+                  ? routines.find((r) => r.id === route.routineId)?.exercises[
+                      route.routineExIndex
+                    ]?.note || ''
+                  : ''
+              }
+              onSaveComment={(commentText) =>
+                handleSaveRoutineExerciseComment(
+                  route.routineId,
+                  route.routineExIndex,
+                  commentText
+                )
+              }
+              activeRoutineId={
+                route.routineExIndex === undefined ? route.routineId : undefined
+              }
+              asWarmup={route.asWarmup}
+              replacingExIdx={route.replacingExIdx}
+              allExercises={allExercises}
+              onDeleteCustomExercise={handleDeleteCustomExercise}
+              onSelectExercise={(newExId) => {
+                const currentRoutine = routines.find(
+                  (r) => r.id === route.routineId
+                );
+                const inferredWarmup =
+                  route.asWarmup ??
+                  (route.routineExIndex !== undefined
+                    ? Boolean(
+                        currentRoutine?.exercises[route.routineExIndex]
+                          ?.isWarmup
+                      )
+                    : false);
+                const inferredReplacingIdx =
+                  route.replacingExIdx !== undefined
+                    ? route.replacingExIdx
+                    : route.routineExIndex !== undefined
+                      ? route.routineExIndex
+                      : null;
 
-              const success = handleAddExerciseToRoutine(
+                setRoute({
+                  name: 'exerciseInfo',
+                  exerciseId: newExId,
+                  routineId: route.routineId,
+                  routineExIndex: undefined,
+                  asWarmup: inferredWarmup,
+                  replacingExIdx: inferredReplacingIdx,
+                  returnTo: route,
+                });
+              }}
+              onAddExerciseToRoutine={(
                 routineId,
                 exerciseId,
                 asWarmup,
                 replacingExIdx
-              );
-              if (success) {
-                setRoute({
-                  name: 'routineDetail',
+              ) => {
+                const targetRoutine = routines.find((r) => r.id === routineId);
+                let scrollIdx = 0;
+                if (replacingExIdx !== null && replacingExIdx !== undefined) {
+                  scrollIdx = replacingExIdx;
+                } else if (asWarmup) {
+                  scrollIdx = (targetRoutine?.exercises || []).filter(
+                    (e) => e.isWarmup
+                  ).length;
+                } else {
+                  scrollIdx = (targetRoutine?.exercises || []).length;
+                }
+
+                const success = handleAddExerciseToRoutine(
                   routineId,
-                  initialEditMode: true,
-                  scrollToIndex: scrollIdx,
-                });
-              }
-            }}
-          />
-        )}
+                  exerciseId,
+                  asWarmup,
+                  replacingExIdx
+                );
+                if (success) {
+                  setRoute({
+                    name: 'routineDetail',
+                    routineId,
+                    initialEditMode: true,
+                    scrollToIndex: scrollIdx,
+                  });
+                }
+              }}
+            />
+          ) : (
+            <div className="bg-white rounded-[24px] p-8 text-center shadow-xs space-y-3 border border-slate-100">
+              <p className="font-bold text-base text-slate-900">
+                {t.exerciseNotFoundTitle} ({route.exerciseId})
+              </p>
+              <button
+                type="button"
+                onClick={handleNavigateBack}
+                className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold cursor-pointer"
+              >
+                {t.back}
+              </button>
+            </div>
+          ))}
       </main>
 
       {/* Edit Routine Name & Category Modal from Routine Detail Header */}
@@ -1135,6 +1376,7 @@ export const App: React.FC = () => {
               onClick={() => {
                 handleSwitchTab('routines');
               }}
+              aria-current={activeTab === 'routines' ? 'page' : undefined}
               className={`flex flex-col items-center justify-center py-1.5 rounded-2xl text-xs transition cursor-pointer ${
                 activeTab === 'routines'
                   ? 'text-blue-600 bg-blue-50 font-bold'
@@ -1161,6 +1403,7 @@ export const App: React.FC = () => {
               onClick={() => {
                 handleSwitchTab('wiki');
               }}
+              aria-current={activeTab === 'wiki' ? 'page' : undefined}
               className={`flex flex-col items-center justify-center py-1.5 rounded-2xl text-xs transition cursor-pointer ${
                 activeTab === 'wiki'
                   ? 'text-blue-600 bg-blue-50 font-bold'
@@ -1184,6 +1427,63 @@ export const App: React.FC = () => {
             </button>
           </div>
         </nav>
+      )}
+
+      {showCorruptModal && (
+        <div
+          className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4"
+          onClick={() => setShowCorruptModal(false)}
+        >
+          <div
+            className="bg-white rounded-[24px] p-5 w-full max-w-lg shadow-xl space-y-3.5 border border-slate-100 max-h-[85vh] flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between">
+              <h3 className="font-bold text-base text-slate-900">
+                {lang === 'vi' ? 'Dữ liệu bộ nhớ lỗi (Quarantine)' : 'Corrupted Storage Data'}
+              </h3>
+              <button
+                type="button"
+                onClick={() => setShowCorruptModal(false)}
+                className="text-slate-400 hover:text-slate-600 text-sm font-bold cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+            <p className="text-xs text-slate-500">
+              {lang === 'vi'
+                ? 'Dưới đây là chuỗi JSON thô được trích xuất từ dữ liệu bị lỗi trước đó. Bạn có thể sao chép để lưu giữ.'
+                : 'Raw JSON payload preserved from corrupted storage. You can copy it to preserve your history.'}
+            </p>
+            <textarea
+              readOnly
+              value={getCorruptBackupRaw() || '(Empty)'}
+              className="w-full flex-1 min-h-[220px] rounded-xl bg-slate-50 p-3 text-[11px] font-mono text-slate-800 border border-slate-200 select-all"
+            />
+            <div className="flex justify-end gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => {
+                  const raw = getCorruptBackupRaw();
+                  if (raw) {
+                    navigator.clipboard.writeText(raw);
+                    showToast(lang === 'vi' ? 'Đã sao chép vào bộ nhớ tạm' : 'Copied to clipboard');
+                  }
+                }}
+                className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold cursor-pointer"
+              >
+                {lang === 'vi' ? 'Sao chép JSON' : 'Copy JSON'}
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowCorruptModal(false)}
+                className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold cursor-pointer"
+              >
+                {t.cancel}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

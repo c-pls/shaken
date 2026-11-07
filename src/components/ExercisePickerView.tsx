@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { Exercise, Language, Routine } from '../types/gym';
 import {
+  translateEquipment,
   translateMuscle,
   translateRoutineText,
   UI_TEXT,
@@ -61,6 +62,17 @@ const MUSCLE_QUICK_FILTERS = [
   'Core',
 ];
 
+const EQUIPMENT_QUICK_FILTERS = [
+  'All',
+  'Barbell',
+  'Dumbbell',
+  'Machine',
+  'Cable',
+  'EZ-Bar',
+  'Kettlebell',
+  'Bodyweight',
+];
+
 export const ExercisePickerView: React.FC<ExercisePickerViewProps> = ({
   routine,
   asWarmup,
@@ -106,12 +118,12 @@ export const ExercisePickerView: React.FC<ExercisePickerViewProps> = ({
     );
   }, [replacedExercise, allExercises, existingExerciseIds]);
 
-  // If user types a search query, search across all exercises automatically
+  // If user types a search query or selects a muscle/equipment filter, search across all exercises automatically
   const baseExercises = useMemo(() => {
-    if (search.trim()) {
+    if (search.trim() || muscleFilter !== 'All' || equipmentFilter !== 'All') {
       return allExercises;
     }
-    if (activeTab === 'most_used' && muscleFilter === 'All') {
+    if (activeTab === 'most_used') {
       const map = new Map(allExercises.map((e) => [e.id, e]));
       const list = MOST_USED_IDS.map((id) => map.get(id)).filter(
         Boolean
@@ -119,7 +131,7 @@ export const ExercisePickerView: React.FC<ExercisePickerViewProps> = ({
       return list.length > 0 ? list : allExercises;
     }
     return allExercises;
-  }, [allExercises, search, activeTab, muscleFilter]);
+  }, [allExercises, search, activeTab, muscleFilter, equipmentFilter]);
 
   const filtered = useMemo(() => {
     return searchAndRankExercises(
@@ -196,9 +208,9 @@ export const ExercisePickerView: React.FC<ExercisePickerViewProps> = ({
               onClick={() => {
                 setSearch('');
               }}
-              className="w-5 h-5 rounded-full bg-slate-200 hover:bg-slate-300 text-slate-600 font-bold text-xs flex items-center justify-center cursor-pointer transition shrink-0"
-              title="Clear search"
-              aria-label="Clear search"
+              className="w-7 h-7 rounded-full bg-slate-200 hover:bg-slate-300 text-slate-600 font-bold text-xs flex items-center justify-center cursor-pointer transition shrink-0"
+              title={lang === 'vi' ? 'Xóa tìm kiếm' : 'Clear search'}
+              aria-label={lang === 'vi' ? 'Xóa tìm kiếm' : 'Clear search'}
             >
               ✕
             </button>
@@ -207,59 +219,92 @@ export const ExercisePickerView: React.FC<ExercisePickerViewProps> = ({
       </div>
 
       {/* 2. SUB-HEADER BAR: SEGMENTED TABS (Most used / All exercises + Muscle Pills) */}
-      <div className="flex items-center gap-1.5 overflow-x-auto pb-1 select-none">
-        {/* Most Used Pill */}
-        <button
-          type="button"
-          onClick={() => {
-            setActiveTab('most_used');
-            setMuscleFilter('All');
-          }}
-          className={`px-3.5 py-1.5 rounded-full text-xs font-bold transition shrink-0 cursor-pointer shadow-2xs ${
-            activeTab === 'most_used' && muscleFilter === 'All' && !search
-              ? 'bg-white text-slate-900 shadow-xs border border-slate-200/80 font-black'
-              : 'bg-slate-200/70 text-slate-600 hover:bg-slate-200'
-          }`}
-        >
-          {t.mostUsedTab}
-        </button>
+      <div className="space-y-1.5 select-none">
+        <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
+          {/* Most Used Pill */}
+          <button
+            type="button"
+            onClick={() => {
+              setActiveTab('most_used');
+              setMuscleFilter('All');
+              setEquipmentFilter('All');
+            }}
+            className={`px-3.5 py-1.5 rounded-full text-xs font-bold transition shrink-0 cursor-pointer shadow-2xs ${
+              activeTab === 'most_used' &&
+              muscleFilter === 'All' &&
+              equipmentFilter === 'All' &&
+              !search
+                ? 'bg-white text-slate-900 shadow-xs border border-slate-200/80 font-black'
+                : 'bg-slate-200/70 text-slate-600 hover:bg-slate-200'
+            }`}
+          >
+            {t.mostUsedTab}
+          </button>
 
-        {/* All Exercises Pill */}
-        <button
-          type="button"
-          onClick={() => {
-            setActiveTab('all');
-            setMuscleFilter('All');
-          }}
-          className={`px-3.5 py-1.5 rounded-full text-xs font-bold transition shrink-0 cursor-pointer shadow-2xs ${
-            activeTab === 'all' && muscleFilter === 'All' && !search
-              ? 'bg-white text-slate-900 shadow-xs border border-slate-200/80 font-black'
-              : 'bg-slate-200/70 text-slate-600 hover:bg-slate-200'
-          }`}
-        >
-          {t.allExercisesTab} ({allExercises.length})
-        </button>
+          {/* All Exercises Pill */}
+          <button
+            type="button"
+            onClick={() => {
+              setActiveTab('all');
+              setMuscleFilter('All');
+              setEquipmentFilter('All');
+            }}
+            className={`px-3.5 py-1.5 rounded-full text-xs font-bold transition shrink-0 cursor-pointer shadow-2xs ${
+              activeTab === 'all' &&
+              muscleFilter === 'All' &&
+              equipmentFilter === 'All' &&
+              !search
+                ? 'bg-white text-slate-900 shadow-xs border border-slate-200/80 font-black'
+                : 'bg-slate-200/70 text-slate-600 hover:bg-slate-200'
+            }`}
+          >
+            {t.allExercisesTab} ({allExercises.length})
+          </button>
 
-        {/* Muscle Category Quick Filter Pills */}
-        {MUSCLE_QUICK_FILTERS.map((m) => {
-          const isSelected = muscleFilter === m;
-          return (
-            <button
-              type="button"
-              key={m}
-              onClick={() => {
-                setMuscleFilter(isSelected ? 'All' : m);
-              }}
-              className={`px-3 py-1.5 rounded-full text-xs font-semibold transition shrink-0 cursor-pointer ${
-                isSelected
-                  ? 'bg-blue-600 text-white font-bold shadow-xs'
-                  : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200/70'
-              }`}
-            >
-              {translateMuscle(m, lang)}
-            </button>
-          );
-        })}
+          {/* Muscle Category Quick Filter Pills */}
+          {MUSCLE_QUICK_FILTERS.map((m) => {
+            const isSelected = muscleFilter === m;
+            return (
+              <button
+                type="button"
+                key={m}
+                onClick={() => {
+                  setMuscleFilter(isSelected ? 'All' : m);
+                }}
+                className={`px-3 py-1.5 rounded-full text-xs font-semibold transition shrink-0 cursor-pointer ${
+                  isSelected
+                    ? 'bg-blue-600 text-white font-bold shadow-xs'
+                    : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200/70'
+                }`}
+              >
+                {translateMuscle(m, lang)}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Equipment Filter Pills */}
+        <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
+          {EQUIPMENT_QUICK_FILTERS.map((eq) => {
+            const isSelected = equipmentFilter === eq;
+            return (
+              <button
+                type="button"
+                key={eq}
+                onClick={() => {
+                  setEquipmentFilter(isSelected && eq !== 'All' ? 'All' : eq);
+                }}
+                className={`px-2.5 py-1 rounded-full text-xs font-medium shrink-0 transition cursor-pointer ${
+                  isSelected
+                    ? 'bg-slate-800 text-white font-semibold'
+                    : 'bg-white/80 text-slate-500 hover:bg-slate-200 border border-slate-200/70'
+                }`}
+              >
+                {translateEquipment(eq, lang)}
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       {/* Routine Destination Banner (Compact 1-liner) */}
@@ -341,6 +386,18 @@ export const ExercisePickerView: React.FC<ExercisePickerViewProps> = ({
           return (
             <div
               key={ex.id}
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  if (isAlreadyAdded) {
+                    onDuplicateWarning?.(displayName);
+                    return;
+                  }
+                  onSelectExercise(ex.id);
+                }
+              }}
               onClick={() => {
                 if (isAlreadyAdded) {
                   onDuplicateWarning?.(displayName);
@@ -348,7 +405,7 @@ export const ExercisePickerView: React.FC<ExercisePickerViewProps> = ({
                 }
                 onSelectExercise(ex.id);
               }}
-              className={`flex items-center justify-between px-4 py-3 transition select-none group ${
+              className={`flex items-center justify-between px-4 py-3 transition select-none group focus:outline-none focus:ring-2 focus:ring-blue-500 rounded-xl ${
                 isAlreadyAdded
                   ? 'bg-amber-50/30 opacity-70 cursor-not-allowed'
                   : 'hover:bg-slate-50 active:bg-blue-50/50 cursor-pointer'

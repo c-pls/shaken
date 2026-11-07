@@ -5,21 +5,19 @@ import Toybox.Communications;
 import Toybox.Lang;
 import Toybox.WatchUi;
 
-class ShakenWatchApp extends Application.AppBase {
-    private var _state as ShakenWorkoutState?;
-    private var _phoneCallback as Communications.PhoneAppMessageCallback?;
+class HaganeWatchApp extends Application.AppBase {
+    private var _state as HaganeWorkoutState?;
 
     function initialize() {
         AppBase.initialize();
     }
 
     function onStart(state as Dictionary?) as Void {
-        _state = new ShakenWorkoutState();
+        _state = new HaganeWorkoutState();
         _state.loadFromStorage();
 
         // Register listener for incoming workouts sent by the phone companion bridge
-        _phoneCallback = method(:onPhoneMessage);
-        Communications.registerForPhoneAppMessages(_phoneCallback);
+        Communications.registerForPhoneAppMessages(method(:onPhoneMessage));
 
         // Automatically request latest routines from the phone via Garmin Connect on launch
         _state.requestSyncFromPhone(true);
@@ -53,9 +51,9 @@ class ShakenWatchApp extends Application.AppBase {
             return;
         }
 
-        var sanitized = ShakenWorkoutState.sanitizeRoutines(routinesObj as Array);
+        var sanitized = HaganeWorkoutState.sanitizeRoutines(routinesObj as Array);
         try {
-            Storage.setValue("shaken_routines", sanitized);
+            Storage.setValue("hagane_routines", sanitized);
         } catch (ex) {
             // Storage quota exceeded or write error; still keep in RAM for this session
         }
@@ -74,15 +72,15 @@ class ShakenWatchApp extends Application.AppBase {
 
     function getInitialView() as [Views] or [Views, InputDelegates] {
         if (_state == null) {
-            _state = new ShakenWorkoutState();
+            _state = new HaganeWorkoutState();
             _state.loadFromStorage();
         }
-        var view = new ShakenWatchView(_state);
-        var delegate = new ShakenWatchDelegate(_state);
+        var view = new HaganeWatchView(_state);
+        var delegate = new HaganeWatchDelegate(_state);
         return [view, delegate];
     }
 }
 
-function getApp() as ShakenWatchApp {
-    return Application.getApp() as ShakenWatchApp;
+function getApp() as HaganeWatchApp {
+    return Application.getApp() as HaganeWatchApp;
 }

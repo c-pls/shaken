@@ -2,10 +2,10 @@ import Toybox.Graphics;
 import Toybox.Lang;
 import Toybox.WatchUi;
 
-class ShakenWatchView extends WatchUi.View {
-    private var _state as ShakenWorkoutState;
+class HaganeWatchView extends WatchUi.View {
+    private var _state as HaganeWorkoutState;
 
-    function initialize(state as ShakenWorkoutState) {
+    function initialize(state as HaganeWorkoutState) {
         View.initialize();
         _state = state;
     }
@@ -21,15 +21,15 @@ class ShakenWatchView extends WatchUi.View {
         dc.clear();
 
         var st = _state.screenState;
-        if (st == ShakenWorkoutState.STATE_ROUTINE_LIST) {
+        if (st == HaganeWorkoutState.STATE_ROUTINE_LIST) {
             drawRoutineList(dc);
-        } else if (st == ShakenWorkoutState.STATE_ACTIVE_SET) {
+        } else if (st == HaganeWorkoutState.STATE_ACTIVE_SET) {
             drawActiveSet(dc);
-        } else if (st == ShakenWorkoutState.STATE_REST) {
+        } else if (st == HaganeWorkoutState.STATE_REST) {
             drawRestTimer(dc);
-        } else if (st == ShakenWorkoutState.STATE_PAUSE_MENU) {
+        } else if (st == HaganeWorkoutState.STATE_PAUSE_MENU) {
             drawPauseMenu(dc);
-        } else if (st == ShakenWorkoutState.STATE_SUMMARY) {
+        } else if (st == HaganeWorkoutState.STATE_SUMMARY) {
             drawSummary(dc);
         }
     }
@@ -321,7 +321,7 @@ class ShakenWatchView extends WatchUi.View {
         dc.setColor(Graphics.COLOR_YELLOW, Graphics.COLOR_TRANSPARENT);
         dc.drawText(cx, 18, Graphics.FONT_XTINY, "WORKOUT PAUSED", Graphics.TEXT_JUSTIFY_CENTER);
 
-        var items = ShakenWorkoutState.PAUSE_MENU_ITEMS;
+        var items = HaganeWorkoutState.PAUSE_MENU_ITEMS;
         var sel = _state.pauseMenuIdx;
 
         for (var i = 0; i < items.size(); i += 1) {

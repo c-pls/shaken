@@ -135,6 +135,13 @@ export const RoutineList: React.FC<RoutineListProps> = ({
     }
   }, [routines.length, isEditMode]);
 
+  useEffect(() => {
+    document.body.dataset.dragging = draggedIdx !== null ? 'true' : '';
+    return () => {
+      document.body.dataset.dragging = '';
+    };
+  }, [draggedIdx]);
+
   const handleCreate = (e: React.FormEvent) => {
     e.preventDefault();
     const trimmed = newName.trim() || `Workout #${routines.length + 1}`;
@@ -350,6 +357,14 @@ export const RoutineList: React.FC<RoutineListProps> = ({
                 setDraggedIdx(null);
                 setDragOverIdx(null);
               }}
+              role={!isEditMode ? 'button' : undefined}
+              tabIndex={!isEditMode ? 0 : undefined}
+              onKeyDown={(e) => {
+                if (!isEditMode && (e.key === 'Enter' || e.key === ' ')) {
+                  e.preventDefault();
+                  onOpenRoutine(routine.id);
+                }
+              }}
               onClick={() => {
                 if (!isEditMode) {
                   onOpenRoutine(routine.id);
@@ -412,7 +427,7 @@ export const RoutineList: React.FC<RoutineListProps> = ({
                           setOpenMenuRoutineId(isMenuOpen ? null : routine.id)
                         }
                         aria-label="Routine options"
-                        className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold text-base flex items-center justify-center transition cursor-pointer"
+                        className="w-9 h-9 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold text-base flex items-center justify-center transition cursor-pointer"
                       >
                         ⋮
                       </button>
@@ -477,7 +492,9 @@ export const RoutineList: React.FC<RoutineListProps> = ({
                   ) : (
                     routine.exercises.map((item, exIdx) => {
                       const ex = exercisesMap[item.exerciseId];
-                      const firstSet = item.sets[0] || { weight: 0, reps: 0 };
+                      const previewSet =
+                        item.sets.find((s) => s.type !== 'warmup') ||
+                        item.sets[0] || { weight: 0, reps: 0 };
                       const displayName =
                         ex && lang === 'vi' && ex.nameVi
                           ? ex.nameVi
@@ -492,7 +509,7 @@ export const RoutineList: React.FC<RoutineListProps> = ({
                             </span>
                             <span className="text-slate-400 font-medium shrink-0">
                               {item.sets.length} {t.setsLabel} •{' '}
-                              {firstSet.weight}kg × {firstSet.reps}
+                              {previewSet.weight}kg × {previewSet.reps}
                             </span>
                           </div>
                           {item.note && (

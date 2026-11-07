@@ -93,6 +93,23 @@ export function toGarminEnglishText(input: string | undefined, maxLen = 40): str
   if (VIETNAMESE_ROUTINE_DICT[lower]) {
     text = VIETNAMESE_ROUTINE_DICT[lower];
   } else {
+    // Tokenize composite titles like "Ngực + Vai" or "Lưng - Tay sau"
+    const tokens = text.split(/([+\-–/&,])/);
+    if (tokens.length > 1) {
+      text = tokens
+        .map((tok) => {
+          const trimmed = tok.trim();
+          const tLower = trimmed.toLowerCase();
+          if (VIETNAMESE_ROUTINE_DICT[tLower]) {
+            return ` ${VIETNAMESE_ROUTINE_DICT[tLower]} `;
+          }
+          return tok;
+        })
+        .join('')
+        .replace(/\s+/g, ' ')
+        .trim();
+    }
+
     text = text
       .normalize('NFD')
       .replace(/[\u0300-\u036f]/g, '')
@@ -105,6 +122,13 @@ export function toGarminEnglishText(input: string | undefined, maxLen = 40): str
     return text.slice(0, maxLen - 1).trimEnd() + '.';
   }
   return text;
+}
+
+function getSupersetLetter(idx: number): string {
+  if (idx < 26) return String.fromCharCode(65 + idx);
+  const first = String.fromCharCode(65 + Math.floor(idx / 26) - 1);
+  const second = String.fromCharCode(65 + (idx % 26));
+  return `${first}${second}`;
 }
 
 /**
@@ -130,7 +154,12 @@ export function buildGarminPayload(
     const exercises: GarminExercisePayload[] = orderedItems.map((item, idx) => {
       const ex = exercisesMap[item.exerciseId];
       // Always use the English exercise name (`ex.name`), never `ex.nameVi`
-      const fallbackLabel = item.exerciseId.replace(/^custom-\d+-?/, '').replace(/[-_]/g, ' ');
+      const fallbackLabel = item.exerciseId
+        .replace(/^custom-[0-9a-fA-F-]+/, '')
+        .replace(/^custom-\d+-?/, '')
+        .replace(/^custom-/, '')
+        .replace(/[-_]/g, ' ')
+        .trim();
       const englishName = toGarminEnglishText(
         ex ? ex.name : fallbackLabel || 'Exercise',
         36
@@ -158,7 +187,7 @@ export function buildGarminPayload(
           } else {
             warmupSupersetMemberIdx++;
           }
-          const letter = String.fromCharCode(65 + Math.min(warmupSupersetMemberIdx, 25));
+          const letter = getSupersetLetter(warmupSupersetMemberIdx);
           orderLabel = `W${warmupGroupOrder}${letter}`;
           isSupersetNext = hasSameNext ? 1 : 0;
         } else {
@@ -184,7 +213,7 @@ export function buildGarminPayload(
           } else {
             mainSupersetMemberIdx++;
           }
-          const letter = String.fromCharCode(65 + Math.min(mainSupersetMemberIdx, 25));
+          const letter = getSupersetLetter(mainSupersetMemberIdx);
           orderLabel = `${mainGroupOrder}${letter}`;
           isSupersetNext = hasSameNext ? 1 : 0;
         } else {
@@ -260,11 +289,55 @@ export function buildGarminPayload(
     payload.routines.pop();
   }
 
+  // Step 3: If a single giant routine still exceeds budget, trim trailing exercises/sets so it never overflows BLE
+  if (
+    payload.routines.length === 1 &&
+    JSON.stringify(payload).length > GARMIN_MAX_PAYLOAD_BYTES
+  ) {
+    const firstRoutine = payload.routines[0];
+    for (const ex of firstRoutine.e) {
+      if (ex.s.length > 20) {
+        ex.s = ex.s.slice(0, 20);
+      }
+    }
+    while (
+      firstRoutine.e.length > 1 &&
+      JSON.stringify(payload).length > GARMIN_MAX_PAYLOAD_BYTES
+    ) {
+      firstRoutine.e.pop();
+    }
+  }
+
   return payload;
 }
 
 let garminDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+let pendingGarminArgs: {
+  routines: Routine[];
+  exercisesMap: Record<string, Exercise>;
+} | null = null;
 let lastSentPayloadJson = '';
+
+async function executeGarminCacheUpdate(
+  routines: Routine[],
+  exercisesMap: Record<string, Exercise>
+): Promise<void> {
+  try {
+    const payload = buildGarminPayload(routines, exercisesMap);
+    const jsonStr = JSON.stringify(payload);
+    if (jsonStr === lastSentPayloadJson) {
+      return;
+    }
+    const res = await GarminSyncNative.cacheRoutinesForWatch({ payload });
+    if (res && res.success) {
+      lastSentPayloadJson = jsonStr;
+    } else {
+      console.warn('[GarminSync] Cache/push returned non-success:', res);
+    }
+  } catch (err) {
+    console.warn('[GarminSync] Failed to update watch cache:', err);
+  }
+}
 
 /**
  * Debounced (2.5s) passive cache & background push to the Android Garmin bridge.
@@ -278,26 +351,31 @@ export function debouncedUpdateGarminWatchCache(
 ): void {
   if (!Capacitor.isNativePlatform()) return;
 
+  pendingGarminArgs = { routines, exercisesMap };
   if (garminDebounceTimer) {
     clearTimeout(garminDebounceTimer);
   }
 
   garminDebounceTimer = setTimeout(async () => {
     garminDebounceTimer = null;
-    try {
-      const payload = buildGarminPayload(routines, exercisesMap);
-      const jsonStr = JSON.stringify(payload);
-      if (jsonStr === lastSentPayloadJson) {
-        return;
-      }
-      const res = await GarminSyncNative.cacheRoutinesForWatch({ payload });
-      if (res && res.success) {
-        lastSentPayloadJson = jsonStr;
-      } else {
-        console.warn('[GarminSync] Cache/push returned non-success:', res);
-      }
-    } catch (err) {
-      console.warn('[GarminSync] Failed to update watch cache:', err);
-    }
+    if (!pendingGarminArgs) return;
+    const args = pendingGarminArgs;
+    pendingGarminArgs = null;
+    await executeGarminCacheUpdate(args.routines, args.exercisesMap);
   }, delayMs);
+}
+
+/**
+ * Immediately flushes any pending Garmin watch cache update when the app enters background
+ * or the screen is locked before the 2.5s debounce timer fires.
+ */
+export function flushGarminWatchCache(): void {
+  if (!Capacitor.isNativePlatform() || !pendingGarminArgs) return;
+  if (garminDebounceTimer) {
+    clearTimeout(garminDebounceTimer);
+    garminDebounceTimer = null;
+  }
+  const args = pendingGarminArgs;
+  pendingGarminArgs = null;
+  void executeGarminCacheUpdate(args.routines, args.exercisesMap);
 }

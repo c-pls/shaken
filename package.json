@@ -9,7 +9,8 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "cap:sync": "npm run build && npx cap sync android",
-    "cap:build:apk": "npm run build && npx cap sync android && cd android && ./gradlew assembleRelease"
+    "cap:build:apk": "npm run build && npx cap sync android && cd android && ./gradlew assembleRelease",
+    "build:garmin": "bash garmin-watch/build.sh"
   },
   "dependencies": {
     "@capacitor/android": "^8.6.0",

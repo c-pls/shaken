@@ -1,15 +1,15 @@
 # ⚔️ Hagane
 
-> **"Forge your steel — Rèn thép mỗi ngày"**
+> **"Forge your steel"**
 > *Offline Gym Workout Tracker, 1080p Exercise Wiki, & Garmin Forerunner Watch Companion for Android and Web*
 
-**Hagane** is a fast, 100% offline-first gym companion engineered for distraction-free workouts. It bundles 199 high-definition 1080p exercise demo videos directly into the app, complete with 1-to-1 bilingual English and natural Vietnamese instructions, custom workout routine tracking with drag-and-drop reordering, per-exercise rest timers, Garmin Forerunner 255 Music watch integration, and smartphone gesture navigation.
+**Hagane** is a fast, 100% offline-first gym companion engineered for distraction-free workouts. It bundles 197 high-definition 1080p exercise demo videos directly into the app, complete with 1-to-1 bilingual English and natural Vietnamese instructions, custom workout routine tracking with drag-and-drop reordering, per-exercise rest timers, Garmin Forerunner 255 Music watch integration, and smartphone gesture navigation.
 
 ---
 
 ## ✨ Features
 
-### 🎥 199 Offline HD Exercise Demos
+### 🎥 197 Offline HD Exercise Demos
 - **Bundled 1080p 30-FPS Videos:** Play instantly without buffering, internet connection, or cellular data in the gym.
 - **Gym Staples & Famous Variations:** Romanian Deadlift (RDL), Bulgarian Split Squat, Barbell & Sumo Deadlifts, Hip Thrusts, Flat/Incline Dumbbell Bench Press, Yates Row, Seal Row, Spider Curls, Skullcrushers, Cable Face Pulls, Lat Prayer, Leg Press Calf Raise, Captain's Chair Leg Raise, Hex Press, and more.
 - **Smart Filtering:** Filter exclusively by primary target muscle group (Quads, Chest, Back, Shoulders, Biceps, Triceps, Hamstrings, Glutes, Core, Calves, Forearms) and equipment (Barbell, Dumbbell, Machine, Cable, EZ-Bar, Bodyweight).
@@ -103,6 +103,18 @@ npm run build
 ```bash
 npm run build
 npx cap sync android
+```
+
+### Garmin Watch Companion Build (Local)
+```bash
+# Sideload binary (Hagane.prg) & Store Package (Hagane.iq)
+npm run build:garmin
+```
+
+### Exercise Wiki & Vietnamese Translation Recovery
+```bash
+# Instantly restore or overlay curated Vietnamese data from snapshot
+python3 scripts/restore_exercises.py
 ```
 
 ---
